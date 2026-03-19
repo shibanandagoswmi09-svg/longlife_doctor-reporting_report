@@ -10,19 +10,19 @@ def calculate_commission(row):
     net = float(row.get('Net Amount', 0))
     pt_name = str(row.get('Pt. Name', '')).upper()
 
-    # 1. Excluded Doctors (Aritra & Amrita)
+    # 1. Exclusion: Dr. Aritra & Amrita
     if 'aritra' in doc_alias or 'amrita' in doc_alias:
         return 0
 
-    # 2. DIALYSIS (S.R. Kidney)
+    # 2. DIALYSIS (S.R. Kidney) - Exact Logic
     if 'DIALYSIS' in dept:
-        # Rule: No Bed Charge, No Swasthya Sathi, No share if Net is 0
+        # Excel logic: No share on Bed Charge, Swasthya Sathi or if Net is 0
         if 'BED CHARGE' in investigation or 'SWASTHYA SATHI' in pt_name or net <= 0:
             return 0
-        # logic: (Gross - Discount) * 80%
+        # Calculation: (Gross - Discount) * 80%
         return (gross - discount) * 0.80
 
-    # 3. CARDIOLOGY (Nandini & Nirbhay)
+    # 3. CARDIOLOGY (Dr. Nandini & Nirbhay)
     if 'CARDIO' in dept:
         if 'nandini' in doc_alias or 'nirbhay' in doc_alias:
             if 'PFT' in investigation:
@@ -30,28 +30,32 @@ def calculate_commission(row):
             # Logic: Gross er opor 25%
             return gross * 0.25
 
-    # 4. ENT (Dr. Arjun, Chirajit, NVK)
+    # 4. ENT (March ENT)
     if 'ENT' in dept:
-        # 0% Share items
-        if any(x in investigation for x in ['AUDIOMETRY', 'REFERRAL', 'CONSULTATION']):
+        # 0% items
+        if any(x in investigation for x in ['AUDIOMETRY', 'REFERRAL']):
             return 0
-        # 80% Share items
+        # 80% items
         if any(x in investigation for x in ['FOL', 'NASAL ENDOSCOPY']):
             return gross * 0.80
-        # Other ENT tests: 20% of Gross
+        # Baki sob ENT test e 20%
         return gross * 0.20
 
     return 0
 
 # --- Streamlit UI ---
-st.title("🏥 Accurate Doctor Reporting")
+st.title("🏥 Final Doctor Reporting Automation")
 
-uploaded_file = st.file_uploader("Upload File", type=['xlsx', 'csv'])
+uploaded_file = st.file_uploader("Upload Your Excel File", type=['xlsx', 'csv'])
 
 if uploaded_file:
-    # Reading file (Skipping garbage header)
-    df = pd.read_excel(uploaded_file, skiprows=1) if uploaded_file.name.endswith('.xlsx') else pd.read_csv(uploaded_file, skiprows=1)
+    # Important: Reading with skiprows=1 to hit the header row correctly
+    if uploaded_file.name.endswith('.xlsx'):
+        df = pd.read_excel(uploaded_file, skiprows=1)
+    else:
+        df = pd.read_csv(uploaded_file, skiprows=1)
     
+    # Cleaning
     df.columns = df.columns.str.strip()
     
     # Numeric Cleanup
@@ -59,17 +63,17 @@ if uploaded_file:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
 
-    # Filtering rows without a Date (to avoid grand total rows)
-    if 'DATE' in df.columns.str.upper():
-        df = df[df.iloc[:, 0].notna()]
-
     # Apply Logic
     df['Calculated_Reporting'] = df.apply(calculate_commission, axis=1)
     
-    # Result
-    total = df['Calculated_Reporting'].sum()
-    st.metric("Total Sum of Doctors Reporting", f"₹ {total:,.1f}")
+    # Final Result
+    final_total = df['Calculated_Reporting'].sum()
     
-    # Summary Table
+    st.success("Analysis Complete!")
+    st.metric("Total Sum of Doctors Reporting", f"₹ {final_total:,.2f}")
+    
+    # Summary for Boss
+    st.subheader("Doctor-wise Summary Table")
     summary = df.groupby('Approved By (Alias)')['Calculated_Reporting'].sum().reset_index()
-    st.table(summary[summary['Calculated_Reporting'] > 0])
+    summary = summary[summary['Calculated_Reporting'] > 0]
+    st.table(summary.style.format({'Calculated_Reporting': '₹ {:.2f}'}))
