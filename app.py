@@ -10,70 +10,67 @@ def calculate_commission(row):
     net = float(row.get('Net Amount', 0))
     pt_name = str(row.get('Pt. Name', '')).upper()
 
-    # 1. Exclusion: Dr. Aritra & Amrita
-    if 'aritra' in doc_alias or 'amrita' in doc_alias:
+    # 1. Exclusion Rule (Dr. Aritra & Amrita)
+    if any(name in doc_alias for name in ['aritra', 'amrita']):
         return 0
 
-    # 2. DIALYSIS (S.R. Kidney) - Exact Logic
+    # 2. DIALYSIS (S.R. Kidney) -> Logic: (Gross - Discount) * 80%
     if 'DIALYSIS' in dept:
-        # Excel logic: No share on Bed Charge, Swasthya Sathi or if Net is 0
+        # Rules: No Bed Charge, No Swasthya Sathi, No share if Net is 0
         if 'BED CHARGE' in investigation or 'SWASTHYA SATHI' in pt_name or net <= 0:
             return 0
-        # Calculation: (Gross - Discount) * 80%
         return (gross - discount) * 0.80
 
-    # 3. CARDIOLOGY (Dr. Nandini & Nirbhay)
+    # 3. CARDIOLOGY (Dr. Nandini & Nirbhay) -> Logic: Gross * 25%
     if 'CARDIO' in dept:
         if 'nandini' in doc_alias or 'nirbhay' in doc_alias:
             if 'PFT' in investigation:
                 return 0
-            # Logic: Gross er opor 25%
             return gross * 0.25
 
-    # 4. ENT (March ENT)
+    # 4. ENT (March ENT) -> Logic Fix
     if 'ENT' in dept:
-        # 0% items
-        if any(x in investigation for x in ['AUDIOMETRY', 'REFERRAL']):
+        # Referral and Audiometry 0%
+        if any(x in investigation for x in ['REFERRAL', 'AUDIOMETRY']):
             return 0
-        # 80% items
+        # FOL and Nasal Endoscopy 80%
         if any(x in investigation for x in ['FOL', 'NASAL ENDOSCOPY']):
             return gross * 0.80
-        # Baki sob ENT test e 20%
+        # Consultation or baki specific items jekhane share pay na (Excel base correction)
+        if 'CONSULTATION' in investigation:
+            return 0
+        # All other tests 20%
         return gross * 0.20
 
     return 0
 
-# --- Streamlit UI ---
-st.title("🏥 Final Doctor Reporting Automation")
+# --- Streamlit Application ---
+st.title("🏥 Accurate Doctor Reporting Module")
 
-uploaded_file = st.file_uploader("Upload Your Excel File", type=['xlsx', 'csv'])
+uploaded_file = st.file_uploader("Upload Billing File", type=['xlsx', 'csv'])
 
 if uploaded_file:
-    # Important: Reading with skiprows=1 to hit the header row correctly
-    if uploaded_file.name.endswith('.xlsx'):
-        df = pd.read_excel(uploaded_file, skiprows=1)
-    else:
-        df = pd.read_csv(uploaded_file, skiprows=1)
+    # Reading file and skipping the 1st row which has the grand total in your CSV
+    df = pd.read_excel(uploaded_file, skiprows=1) if uploaded_file.name.endswith('.xlsx') else pd.read_csv(uploaded_file, skiprows=1)
     
-    # Cleaning
     df.columns = df.columns.str.strip()
     
-    # Numeric Cleanup
+    # Numeric conversion for columns
     for col in ['Gross Amount', 'Discount', 'Net Amount']:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
 
-    # Apply Logic
-    df['Calculated_Reporting'] = df.apply(calculate_commission, axis=1)
+    # Filter out total/empty rows
+    df = df[df['Approved By (Alias)'].notna()]
+
+    # Calculation
+    df['Doctors Reporting'] = df.apply(calculate_commission, axis=1)
     
-    # Final Result
-    final_total = df['Calculated_Reporting'].sum()
+    total_result = df['Doctors Reporting'].sum()
     
-    st.success("Analysis Complete!")
-    st.metric("Total Sum of Doctors Reporting", f"₹ {final_total:,.2f}")
+    st.metric("Final Sum of Doctors Reporting", f"₹ {total_result:,.2f}")
     
-    # Summary for Boss
-    st.subheader("Doctor-wise Summary Table")
-    summary = df.groupby('Approved By (Alias)')['Calculated_Reporting'].sum().reset_index()
-    summary = summary[summary['Calculated_Reporting'] > 0]
-    st.table(summary.style.format({'Calculated_Reporting': '₹ {:.2f}'}))
+    # Breakdown Table
+    st.subheader("Department-wise Breakup")
+    summary = df.groupby(['Department Name', 'Approved By (Alias)'])['Doctors Reporting'].sum().reset_index()
+    st.table(summary[summary['Doctors Reporting'] > 0].style.format({'Doctors Reporting': '₹ {:.2f}'}))
