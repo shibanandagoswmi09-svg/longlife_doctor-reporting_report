@@ -5,7 +5,7 @@ st.set_page_config(page_title="Doctor Reporting Automation", layout="wide")
 
 st.title("🏥 Doctor's Reporting Automation System")
 
-uploaded_file = st.file_uploader("Upload Billing File", type=['csv', 'xlsx'])
+uploaded_file = st.file_uploader("Upload File", type=['csv', 'xlsx'])
 
 def calculate_commission(row):
     dept = str(row.get('Department Name', '')).upper()
@@ -13,78 +13,63 @@ def calculate_commission(row):
     investigation = str(row.get('Investigation Name', '')).upper()
     gross = float(row.get('Gross Amount', 0))
     net = float(row.get('Net Amount', 0))
-    pt_name = str(row.get('Pt. Name', '')).upper()
     
-    # 1. Exclusion Rule: Dr. Aritra & Amrita (Sobar agey)
-    if 'aritra' in doc_alias or 'amrita' in doc_alias:
+    # 1. Exclusion Rule: Dr. Aritra & Amrita 
+    if any(name in doc_alias for name in ['aritra', 'amrita']):
         return 0
     
-    # 2. Dialysis Logic (Checking Swasthya Sathi & Net Amount 0)
+    # 2. Dialysis Logic (S.R. Kidney)
     if 'DIALYSIS' in dept:
-        # Jodi Net Amount 0 hoy ba Pt Name e Swasthya Sathi thake
-        if 'SWASTHYA SATHI' in pt_name or net == 0:
+        # Excel sheet e dekha jacche Bed Charge ba 0 Net Amount thakle reporting 0 hoy
+        if 'BED CHARGE' in investigation or net == 0 or gross == 0:
             return 0
         return gross * 0.80
     
     # 3. Cardio Dept. A (Nandini & Nirbhay)
     if 'CARDIOLOGY' in dept:
-        if 'nandini' in doc_alias or 'nirbhay' in doc_alias:
+        if any(name in doc_alias for name in ['nandini', 'nirbhay']):
             if 'PFT' in investigation:
                 return 0
-            # Only 25% for heart tests (ECG, ECHO, etc.)
+            # Basic calculation: 25% of Gross
             return gross * 0.25
             
-    # 4. ENT Dept (Arjun, Chirajit, NVK)
+    # 4. ENT Dept (March ENT)
     if 'ENT' in dept:
+        # Specific 0% items
         if any(x in investigation for x in ['AUDIOMETRY', 'REFERRAL']):
             return 0
+        # Specific 80% items
         if any(x in investigation for x in ['FOL', 'NASAL ENDOSCOPY']):
             return gross * 0.80
-        # Normal ENT test 20%
+        # Others 20%
         return gross * 0.20
 
     return 0 
 
 if uploaded_file:
-    # Header skip logic (Exactly as per your CSV/Excel structure)
-    try:
-        if uploaded_file.name.endswith('.csv'):
-            df = pd.read_csv(uploaded_file, skiprows=1)
-        else:
-            df = pd.read_excel(uploaded_file, skiprows=1)
+    # Important: Header row detection
+    # Apnar file e prothom 1-2 row te garbage data thake, tai skiprows=1 must.
+    df = pd.read_excel(uploaded_file, skiprows=1) if uploaded_file.name.endswith('.xlsx') else pd.read_csv(uploaded_file, skiprows=1)
+    
+    # Cleanup column names
+    df.columns = df.columns.str.strip()
+    
+    if 'Gross Amount' in df.columns:
+        # Numeric conversion
+        df['Gross Amount'] = pd.to_numeric(df['Gross Amount'], errors='coerce').fillna(0)
+        df['Net Amount'] = pd.to_numeric(df['Net Amount'], errors='coerce').fillna(0)
         
-        # Cleanup
-        df.columns = df.columns.str.strip()
+        # Apply strict logic
+        df['Calculated_Reporting'] = df.apply(calculate_commission, axis=1)
         
-        # Force Numeric Conversion
-        for col in ['Gross Amount', 'Net Amount', 'Discount']:
-            if col in df.columns:
-                df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+        # Remove any Grand Total rows that might be in the data
+        df = df[df['Approved By (Alias)'].notna()]
         
-        # Filter: Remove 'Grand Total' row if it exists at the bottom
-        df = df[df['Date'].notna()] if 'Date' in df.columns else df
-
-        # Calculation
-        df['Calculated Reporting'] = df.apply(calculate_commission, axis=1)
+        total_val = df['Calculated_Reporting'].sum()
         
-        # Display Metrics
-        total_calc = df['Calculated Reporting'].sum()
+        st.metric("Total Sum of Doctors Reporting", f"₹ {total_val:,.2f}")
         
-        c1, c2 = st.columns(2)
-        with c1:
-            st.metric("Total Calculated Sum", f"₹ {total_calc:,.2f}")
-        with c2:
-            st.info("Check if this matches your manual Excel calculation.")
-
-        # Result Table
-        st.subheader("Final Reporting Summary")
-        summary = df.groupby('Approved By (Alias)')['Calculated Reporting'].sum().reset_index()
-        st.dataframe(summary.style.format({'Calculated Reporting': '₹ {:.2f}'}))
-
-        # Comparison with existing 'Doctors Reporting' column (if present)
-        if 'Doctors Reporting' in df.columns:
-            old_total = pd.to_numeric(df['Doctors Reporting'], errors='coerce').sum()
-            st.write(f"Excel File's Original Total: ₹ {old_total:,.2f}")
-
-    except Exception as e:
-        st.error(f"Error processing file: {e}")
+        # Breakdown to verify
+        st.subheader("Doctor-wise Breakdown")
+        summary = df.groupby('Approved By (Alias)')['Calculated_Reporting'].sum().reset_index()
+        st.table(summary)
